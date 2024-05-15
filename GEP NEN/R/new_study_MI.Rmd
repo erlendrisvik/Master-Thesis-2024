@@ -1,0 +1,552 @@
+---
+title: "new_study_MI"
+output: pdf_document
+date: "2024-02-08"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Multiple imputation of new study
+
+## EDA
+
+### Loading packages and data
+
+```{r}
+library("readxl")
+library("dplyr")
+library("glue")
+library("mice")
+library("survival")
+library("SurvMetrics")
+library("ggplot2")
+library("ggrepel")
+library("caret")
+library("reshape2")
+```
+
+```{r cars}
+path_erlend = "../../data/GEP-NEN-data/updated/new_study.xlsx"
+path_nina = "../../Both/new_study.xlsx"
+df.raw = read_excel(path_nina, sheet = 1, na = "NaN")
+head(df.raw)
+```
+
+
+### Setting Not done and unknown to NA
+
+```{r}
+#df[df["Date of PT Resection"]   == "<NA>"] = NA
+#df.raw[df.raw == "Not Done"] = NA
+#df.raw[df.raw == "Unknown"] = NA
+```
+
+### Check constant columns
+
+```{r}
+cols_with_one_unique_value <- function(df) {
+  sapply(df, function(x) length(unique(na.omit(x)))) == 1
+}
+
+cols_to_print <- cols_with_one_unique_value(df.raw)
+
+# Print columns with only one unique value
+print(df.raw[, cols_to_print])
+```
+
+```{r}
+print_low_variance_cols <- function(df, threshold = 0.9) {
+  # This function will print the names of columns with low variance along with their value counts.
+  # For numeric columns, it calculates the variance.
+  # For categorical columns, it checks if the proportion of the most common value is above the threshold (default is 90%),
+  # and prints the counts of each unique value.
+  
+  for (col_name in names(df)) {
+    col <- df[[col_name]]
+    
+    if (is.numeric(col)) {
+      # If the column is numeric, calculate variance.
+      var_col <- var(col, na.rm = TRUE)
+      if (var_col < threshold) {
+        cat(col_name, "has low variance:", var_col, "\n")
+      }
+    } else {
+      # If the column is not numeric, check the proportion of the most common value.
+      freq <- table(col)
+      prop_max <- max(freq) / sum(freq)
+      if (prop_max > threshold) {
+        cat(col_name, "has low variance with predominant value: ", names(freq)[which.max(freq)], "\n")
+        cat("Value counts: ", paste(names(freq), "=", freq, collapse=", "), "\n\n")
+      }
+    }
+  }
+}
+
+print_low_variance_cols(df.raw)
+
+```
+
+
+### Removing features and samples (mostly done)
+
+```{r}
+# Not used, also linear dependence
+to_remove_1 = c("Ki-67 grouping", "OS (months)")
+
+# remove PATNO, Age at death keep?
+to_remove_2 = c("PATNO", "Age at Death")
+
+df <- subset(df.raw, select = !(names(df.raw) %in% to_remove_1))
+df <- subset(df, select = !(names(df) %in% to_remove_2))
+```
+
+### Investigating linear relationships
+
+```{r}
+# Function to encode variables
+encode_to_numeric <- function(df) {
+  df[] <- lapply(df, function(x) {
+    if(is.factor(x) | is.character(x)) {
+      x <- as.factor(x) # Convert to factor if it's not already
+      return(as.numeric(x)) # Convert factor to numeric
+    } else {
+      return(x) # Keep as is if numeric
+    }
+  })
+  return(df)
+}
+
+df_numeric <- encode_to_numeric(df)
+```
+
+```{r}
+corr = cor(df_numeric, use = "pairwise.complete.obs")
+```
+```{r}
+cor_matrix <- corr
+# Set NA to 0 
+cor_matrix[is.na(cor_matrix)] <- 0
+
+cor_above_threshold <- cor_matrix > 0.5
+diag(cor_above_threshold) <- FALSE
+keep_vars <- apply(cor_above_threshold, 1, any)
+
+filtered_cor_matrix <- cor_matrix[keep_vars, keep_vars]
+
+melted_filtered_matrix = melt(filtered_cor_matrix)
+g = ggplot(melted_filtered_matrix, aes(Var1, Var2, fill = value)) +
+  geom_tile(color = "white") +
+  scale_fill_gradient2(low = "blue", high = "red", mid = "white", midpoint = 0.5, limit = c(0.3, 1),
+                       space = "Lab", name="Correlation") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1),
+        axis.title = element_blank()) +
+  geom_text(aes(label = round(value, 2)), size = 3) +
+  labs(title = "Correlation Matrix Heatmap (Filtered > 0.5)")
+
+# Optionally, save the plot with increased dimensions for a larger view
+ggsave("filtered_heatmap_plot.png", plot = g, width = 20, height = 15, dpi = 300)
+```
+
+We can definitely see some strongly (and also perfectly) correlated features
+
+```{r}
+#df[, c("Stage grouped", "M-stage")]
+```
+
+```{r}
+# Remove highly correlated features
+to_remove_3 = c("M-stage", "TNM-staging", "Time from diag to mets (months)")
+df <- subset(df, select = !(names(df) %in% to_remove_3))
+
+```
+
+### Encoding
+
+```{r}
+# Removed Metastatic disease (from correlation)
+one_hot_enc = c("Primary Tumour",
+                "Primary Tumour Resected", 
+                "Prior Other Cancer",
+                "Sex",
+                "Tumour Morphology",
+                "Haemoglobin",
+                "Platelets",
+                "WBC",
+                "Mets(Bone)",
+              #  "Mets(Brain)", removed because low variance
+                "Mets(LN)",
+                "Mets(Liver)",
+                "Mets(Lung)", 
+                "Mets(Other)",
+                "Chemotherapy Type",
+              #  "Reintroduction with Cisplatin+Etoposide",
+                "Co-morbidity Severity",
+               # "TNM-staging", removed because > 90 corr
+              #  "M-stage",
+                #"Radical Surgery",
+                #"FDG-PET Uptake", removed because constant
+                #"NEC/MANEC",
+                "Co-morbidity",
+                "Hist Exam Metastasis",
+                "Hist Exam Primary Tumour",
+                #"Treatment Intention",
+                "Dev of Bone Mets",
+                #"Dev of Brain Mets",
+                "Loc Adv Resectable Disease",
+               # "Mets(Skin)", low variation
+                "Mets(LN Retro)",
+                "Mets(LN Regional)", 
+                "Mets(LN Distant)",
+                "Treatment Stopped",
+                # "Bone Mets", removed because collinearity
+              #  "Metastatic Disease", removed because low variation
+                "Living Alone",
+                #"Creatinine", 
+                "Stage grouped",
+                "Smoking",
+                "Best Response (RECIST)")
+
+# check values
+for (col in one_hot_enc){
+  print(glue("Column: {col}, values: {unique(df[col])}\n"))
+}
+```
+
+Co-morbidity and co-morbidity severity may be MAR (severity missing)
+
+```{r}
+binary = c("Primary Tumour Resected", 
+           "Prior Other Cancer", 
+           "Sex", 
+           "Haemoglobin", 
+           "Platelets",
+           "WBC",
+           "Mets(Bone)",
+           "Mets(LN)",
+           "Mets(Liver)",
+           "Mets(Lung)",
+           "Mets(Other)",
+           "Co-morbidity Severity",
+           #"Radical Surgery",
+           #"NEC/MANEC",
+           "Co-morbidity",
+           "Hist Exam Metastasis",
+           "Hist Exam Primary Tumour",
+           #"Treatment Intention",
+           "Dev of Bone Mets",
+           #"Dev of Brain Mets",
+           "Loc Adv Resectable Disease",
+           "Mets(LN Retro)",
+           "Mets(LN Regional)",
+           "Mets(LN Distant)",
+           "Living Alone",
+           #"Creatinine",
+           "Stage grouped")
+
+
+factor_gr_2 = c("Primary Tumour",
+                "Tumour Morphology",
+                "Chemotherapy Type", 
+                "Treatment Stopped",
+                "Smoking",
+                "Best Response (RECIST)")
+
+combined = c(binary, factor_gr_2)
+all(one_hot_enc %in% combined)
+```
+
+Not sure if encoding is correct in R? Henning suggested order 0, 1, 2 for Negative, Partly Positive and Strongly Positive.
+
+```{r}
+factor_levels <- list(
+  `Chromogranin A2` = c("Normal", ">Normal <= 2UNL", "> 2UNL"), 
+  Differentiation = c("Highly Differentiated", "Intermediate", "Poorly Differentiated"),
+  `Chromogranin A` = c("Negative", "Partly Positive", "Strongly Positive"),
+  NSE = c("Normal", ">Normal <= 2UNL", "> 2UNL"),
+  Synaptophysin = c("Negative", "Partly Positive", "Strongly Positive"),
+  `WHO Perf Stat` = c("WHO 0", "WHO 1", "WHO 2", "WHO 3", "WHO 4"),
+  ALP = c("Normal", ">Normal <= 3 UNL", ">3 UNL"),
+  LDH = c("Normal", ">Normal <= 2UNL", "> 2UNL"),
+  #`CD-56` = c("Negative", "Partly Positive", "Strongly Positive"), Removed?
+  `T-stage` = c("Tx", "T0", "T2", "T3", "T4"),
+  `N-stage` = c("Nx", "N0", "N1", ">N1"),
+  #SRI = c("Negative", "< Liver", "> Liver"),
+  Octreoscan = c("Negative", "< Liver", "> Liver"),
+  `CD-56` = c('Negative', 'Partly Positive', 'Strongly Positive') 
+)
+```
+
+```{r}
+accounted_for = c(names(factor_levels), factor_gr_2, binary)
+df[,names(df)[!names(df) %in% accounted_for]]
+```
+
+Manually encode the rest
+
+```{r}
+integer = c("BMI",
+            "Ki-67",
+            "Absolute Neutrophil Count",
+            "Albumin",
+            "CRP",
+            "Number of Courses",
+            "OS (days)",
+            "Time from diag to mets (days)",
+            "Age at Diagnosis")
+
+# Try numeric instead
+numeric = c("BMI",
+            "Ki-67",
+            "Absolute Neutrophil Count",
+            "Albumin",
+            "CRP",
+            "Number of Courses",
+            "OS (days)",
+            "Time from diag to mets (days)",
+            "Age at Diagnosis")
+
+bool = c("Status")
+
+#df[integer] = lapply(df[integer], as.integer)
+df[numeric] = lapply(df[numeric], as.numeric)
+df$Status = ifelse(df$Status == "Dead", 1, 0)
+df[bool] = lapply(df[bool], as.logical)
+
+df[binary] = lapply(df[binary], factor)
+df[factor_gr_2] = lapply(df[factor_gr_2], factor, ordered = FALSE)
+df[names(factor_levels)] <- lapply(names(factor_levels), function(col_name) {
+  factor(df[[col_name]], levels = factor_levels[[col_name]])
+})
+```
+
+### Changing column names
+
+```{r}
+rename_col = function(old, new, df){
+  names(df)[names(df) == old] <- new
+  return (df)
+}
+
+fixColNames <- function(df) {
+  # Use gsub to replace spaces with underscores in each column name
+  names(df) <- gsub(" ", "_", names(df))
+  names(df) <- gsub("\\+", "Plus", names(df))
+  names(df) <- gsub("\\-", "Minus", names(df))
+  names(df) <- gsub("\\.", "Dot", names(df))
+  names(df) <- gsub("\\(", "leftB", names(df))
+  names(df) <- gsub("\\)", "rightB", names(df))
+  names(df) <- gsub("\\__", "double_under", names(df))
+  names(df) <- gsub("/", "slash", names(df))
+  names(df) <- gsub("1", "uno", names(df))
+  names(df) <- gsub("2", "two", names(df))
+  names(df) <- gsub("3", "three", names(df))
+  names(df) <- gsub("56", "fiftysix", names(df))
+  names(df) <- gsub("67", "sixtyseven", names(df))
+
+  # Return the modified dataframe
+  return(df)
+}
+
+df.renamed = fixColNames(df)
+```
+
+```{r}
+print(str(df.renamed))
+```
+
+## Multiple Imputation
+
+```{r}
+df.mice = df.renamed %>% subset(select = -c(Status, OS_leftBdaysrightB))
+```
+
+### Initial (dry run)
+
+Dry run to investigate correct setup
+
+```{r}
+ini = mice(df.mice, maxit = 0)
+ini
+```
+
+
+```{r}
+ini$nmis
+```
+
+Extract the method to alter the ordered ones (they are currently treated as polytomous)
+
+```{r}
+me = ini$method
+me
+```
+
+```{r}
+names(me)
+```
+
+```{r}
+names(factor_levels)
+```
+
+```{r}
+ordered = c("Chromogranin_Atwo",
+            "Differentiation", 
+            "Chromogranin_A",
+            "NSE", 
+            "Synaptophysin",
+            "WHO_Perf_Stat", 
+            "ALP",
+            "LDH",
+    #        "CDMinusfiftysix",
+            "TMinusstage",
+            "NMinusstage")
+  
+for (col in ordered){
+  me[col] = "polr"
+}
+
+me
+```
+
+### Run by filtering mincor = 0.1
+
+```{r}
+predictor_matrix = quickpred(df.mice, mincor = 0.1)
+```
+
+
+```{r}
+M = 50
+
+imp = mice(df.mice, m = M, pred = predictor_matrix, me = me, seed = 124124)
+```
+
+400 logged events.. not good
+
+```{r}
+imp$loggedEvents
+```
+
+### Attempt to reduce columns by investigating the influx and outflux
+
+```{r}
+fluxplot(df.mice, eqscplot = FALSE)
+```
+
+A bit cluttered. Let's try to manually plot
+
+```{r}
+df.flux = flux(df.mice)
+df.flux = df.flux[order(-df.flux$influx, -df.flux$outflux), ]
+df.flux.reduced =  df.flux[df.flux$outflux < 0.8, ]
+df.flux
+```
+
+
+```{r}
+df.flux.reduced$labels <- rownames(df.flux.reduced) 
+
+
+ggplot(df.flux.reduced, aes(x = influx, y = outflux, label = labels)) + 
+  geom_point() +  
+  geom_text_repel(size = 3.5,    
+                  nudge_x = 0.05, 
+                  nudge_y = 0.05, 
+                  box.padding = 0.35, 
+                  point.padding = 0.5) + 
+  labs(x = "Influx", y = "Outflux", title = "Influx vs Outflux") + 
+  theme_minimal()  
+```
+
+
+Try removing Differentiation,, Chromogranin_Atwo and CD_fiftysix
+
+Chemotherapy type
+
+```{r}
+# cd 56 can stay
+
+#low.flux.cols = c("Differentiation", "Chromogranin_Atwo")
+#df.reduced <- subset(df.mice, select = !(names(df.mice) %in% low.flux.cols))
+
+#keepNames <- setdiff(names(me), low.flux.cols)
+#me.reduced <- me[keepNames]
+```
+
+```{r}
+#predictor_matrix = quickpred(df.reduced, mincor = 0.3)
+```
+
+```{r}
+#names(df.reduced)
+```
+
+```{r}
+imp = mice(df.mice, m = M, pred = predictor_matrix, me = "pmm", seed = 124124)
+```
+
+```{r}
+imp$loggedEvents
+```
+
+### Assessing convergence
+
+"On convergence, the streams should intermingle and be free of any trend"
+
+
+```{r}
+plot(imp)
+```
+
+```{r}
+complete(imp, 1)
+```
+
+## Saving the imputed datasets
+
+```{r}
+revert_ColNames <- function(df) {
+  # Reverse replacements made by fixColNames
+  names(df) <- gsub("sixtyseven", "67", names(df))
+  names(df) <- gsub("fiftysix", "56", names(df))
+  names(df) <- gsub("three", "3", names(df))
+  names(df) <- gsub("two", "2", names(df))
+  names(df) <- gsub("uno", "1", names(df))
+  names(df) <- gsub("slash", "/", names(df))
+  names(df) <- gsub("double_under", "__", names(df))
+  names(df) <- gsub("rightB", ")", names(df))
+  names(df) <- gsub("leftB", "(", names(df))
+  names(df) <- gsub("Dot", ".", names(df))
+  names(df) <- gsub("Minus", "-", names(df))
+  names(df) <- gsub("Plus", "+", names(df))
+  names(df) <- gsub("_", " ", names(df)) # This replacement is done last to avoid conflicts
+
+  return(df)
+}
+
+# INSERT PATH NINA
+file_path_nina = "../R/datasets/pmm/"
+#file_path_nina = "/Users/ninarebeccalizana/Documents/Master/code/New-Study/R/datasets/single"
+file_path_erlend = "../../data/R/MI/new_study/"
+
+save_datasets = function(mice.obj, file_path){
+  M = mice.obj$m
+  for (m in seq(1, M)){
+    df.m = complete(mice.obj, m)
+    df.m = revert_ColNames(df.m)
+    df.m[, c("status", "time", "PATNO")] = df.raw[, c("Status", "OS (days)", "PATNO")]
+
+    write.csv(df.m, glue("{file_path}new_studyM{m}.csv"))
+    }
+  }
+```
+
+```{r}
+#save_datasets(mice.obj = imp, file_path = file_path_erlend)
+save_datasets(mice.obj = imp, file_path = file_path_nina)
+```
+
