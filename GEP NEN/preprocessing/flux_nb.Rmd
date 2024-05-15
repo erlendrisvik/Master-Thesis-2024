@@ -1,0 +1,68 @@
+---
+title: "Flux notebook"
+output: pdf_document
+date: "2024-02-08"
+---
+
+# Notebook to investigate flux
+
+```{r}
+library("readxl")
+library("dplyr")
+library("glue")
+library("mice")
+library("ggplot2")
+library("ggrepel")
+library("caret")
+```
+
+
+## Load data
+
+```{r cars}
+path_erlend = "../../data/GEP-NEN-data/updated/new_study_unfiltered.xlsx"
+path_nina = "../../Both/new_study.xlsx"
+df.raw = read_excel(path_erlend, sheet = 1, na = "NaN")
+head(df.raw)
+```
+
+## Graph flux
+
+```{r}
+fluxplot(df.raw, eqscplot = FALSE)
+```
+
+
+```{r}
+df.flux = flux(df.raw)
+df.flux = df.flux[order(-df.flux$influx, -df.flux$outflux), ]
+df.flux.reduced =  df.flux[df.flux$outflux < 0.8, ]
+df.flux
+```
+
+
+```{r}
+df.flux.reduced$labels <- rownames(df.flux.reduced) 
+
+
+ggplot(df.flux.reduced, aes(x = influx, y = outflux, label = labels)) + 
+  geom_point() +  
+  geom_text_repel(size = 3.5,    
+                  nudge_x = 0.05, 
+                  nudge_y = 0.05, 
+                  box.padding = 0.35, 
+                  point.padding = 0.5) + 
+  labs(x = "Influx", y = "Outflux", title = "Influx vs Outflux") + 
+  theme_minimal()  
+```
+
+## Save flux df to csv
+ 
+```{r}
+file_name = "influx_outflux"
+file_path_nina = " ../"
+file_path_erlend = "../../data/influx_outflux/influxoutflux.csv"
+write.csv(df.flux, file_path_erlend)
+```
+
+
