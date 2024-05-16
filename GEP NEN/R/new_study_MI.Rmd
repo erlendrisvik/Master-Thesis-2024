@@ -35,26 +35,7 @@ head(df.raw)
 ```
 
 
-### Setting Not done and unknown to NA
-
-```{r}
-#df[df["Date of PT Resection"]   == "<NA>"] = NA
-#df.raw[df.raw == "Not Done"] = NA
-#df.raw[df.raw == "Unknown"] = NA
-```
-
-### Check constant columns
-
-```{r}
-cols_with_one_unique_value <- function(df) {
-  sapply(df, function(x) length(unique(na.omit(x)))) == 1
-}
-
-cols_to_print <- cols_with_one_unique_value(df.raw)
-
-# Print columns with only one unique value
-print(df.raw[, cols_to_print])
-```
+### Double check low variance columns
 
 ```{r}
 print_low_variance_cols <- function(df, threshold = 0.9) {
@@ -151,10 +132,6 @@ ggsave("filtered_heatmap_plot.png", plot = g, width = 20, height = 15, dpi = 300
 ```
 
 We can definitely see some strongly (and also perfectly) correlated features
-
-```{r}
-#df[, c("Stage grouped", "M-stage")]
-```
 
 ```{r}
 # Remove highly correlated features
@@ -322,7 +299,7 @@ df[names(factor_levels)] <- lapply(names(factor_levels), function(col_name) {
 })
 ```
 
-### Changing column names
+### Changing column names (technicality in R)
 
 ```{r}
 rename_col = function(old, new, df){
@@ -412,7 +389,17 @@ for (col in ordered){
 me
 ```
 
-### Run by filtering mincor = 0.1
+### Imputation by PMM
+
+```{r}
+imp = mice(df.mice, m = M, pred = predictor_matrix, me = "pmm", seed = 124124)
+```
+
+```{r}
+imp$loggedEvents
+```
+
+### Imputation by specifying the models
 
 ```{r}
 predictor_matrix = quickpred(df.mice, mincor = 0.1)
@@ -425,78 +412,13 @@ M = 50
 imp = mice(df.mice, m = M, pred = predictor_matrix, me = me, seed = 124124)
 ```
 
-400 logged events.. not good
 
 ```{r}
 imp$loggedEvents
 ```
 
-### Attempt to reduce columns by investigating the influx and outflux
-
-```{r}
-fluxplot(df.mice, eqscplot = FALSE)
-```
-
-A bit cluttered. Let's try to manually plot
-
-```{r}
-df.flux = flux(df.mice)
-df.flux = df.flux[order(-df.flux$influx, -df.flux$outflux), ]
-df.flux.reduced =  df.flux[df.flux$outflux < 0.8, ]
-df.flux
-```
-
-
-```{r}
-df.flux.reduced$labels <- rownames(df.flux.reduced) 
-
-
-ggplot(df.flux.reduced, aes(x = influx, y = outflux, label = labels)) + 
-  geom_point() +  
-  geom_text_repel(size = 3.5,    
-                  nudge_x = 0.05, 
-                  nudge_y = 0.05, 
-                  box.padding = 0.35, 
-                  point.padding = 0.5) + 
-  labs(x = "Influx", y = "Outflux", title = "Influx vs Outflux") + 
-  theme_minimal()  
-```
-
-
-Try removing Differentiation,, Chromogranin_Atwo and CD_fiftysix
-
-Chemotherapy type
-
-```{r}
-# cd 56 can stay
-
-#low.flux.cols = c("Differentiation", "Chromogranin_Atwo")
-#df.reduced <- subset(df.mice, select = !(names(df.mice) %in% low.flux.cols))
-
-#keepNames <- setdiff(names(me), low.flux.cols)
-#me.reduced <- me[keepNames]
-```
-
-```{r}
-#predictor_matrix = quickpred(df.reduced, mincor = 0.3)
-```
-
-```{r}
-#names(df.reduced)
-```
-
-```{r}
-imp = mice(df.mice, m = M, pred = predictor_matrix, me = "pmm", seed = 124124)
-```
-
-```{r}
-imp$loggedEvents
-```
 
 ### Assessing convergence
-
-"On convergence, the streams should intermingle and be free of any trend"
-
 
 ```{r}
 plot(imp)
