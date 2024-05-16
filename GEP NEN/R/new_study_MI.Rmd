@@ -391,8 +391,11 @@ me
 
 ### Imputation by PMM
 
+
 ```{r}
-imp = mice(df.mice, m = M, pred = predictor_matrix, me = "pmm", seed = 124124)
+G = 50
+
+imp = mice(df.mice, m = G, pred = predictor_matrix, me = "pmm", seed = 124124)
 ```
 
 ```{r}
@@ -407,9 +410,7 @@ predictor_matrix = quickpred(df.mice, mincor = 0.1)
 
 
 ```{r}
-M = 50
-
-imp = mice(df.mice, m = M, pred = predictor_matrix, me = me, seed = 124124)
+imp = mice(df.mice, m = G, pred = predictor_matrix, me = me, seed = 124124)
 ```
 
 
