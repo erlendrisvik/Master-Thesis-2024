@@ -457,13 +457,13 @@ file_path_nina = "../R/datasets/pmm/"
 file_path_erlend = "../../data/R/MI/new_study/"
 
 save_datasets = function(mice.obj, file_path){
-  M = mice.obj$m
-  for (m in seq(1, M)){
-    df.m = complete(mice.obj, m)
-    df.m = revert_ColNames(df.m)
-    df.m[, c("status", "time", "PATNO")] = df.raw[, c("Status", "OS (days)", "PATNO")]
+  G = mice.obj$m
+  for (g in seq(1, G)){
+    df.g = complete(mice.obj, g)
+    df.g = revert_ColNames(df.g)
+    df.g[, c("status", "time", "PATNO")] = df.raw[, c("Status", "OS (days)", "PATNO")]
 
-    write.csv(df.m, glue("{file_path}new_studyM{m}.csv"))
+    write.csv(df.g, glue("{file_path}new_studyG{g}.csv"))
     }
   }
 ```
