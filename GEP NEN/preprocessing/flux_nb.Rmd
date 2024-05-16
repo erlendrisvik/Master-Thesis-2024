@@ -20,7 +20,7 @@ library("caret")
 ## Load data
 
 ```{r cars}
-path_erlend = "../../data/GEP-NEN-data/updated/new_study_unfiltered.xlsx"
+path_erlend = "../../data/GEP-NEN-data/updated/new_study.xlsx"
 path_nina = "../../Both/new_study.xlsx"
 df.raw = read_excel(path_erlend, sheet = 1, na = "NaN")
 head(df.raw)
